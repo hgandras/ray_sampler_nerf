@@ -1,0 +1,13 @@
+[project]
+name = "ray_sampler_nerf"
+version = "0.1"
+
+dependencies = [
+    "nerfstudio" # you may want to consider pinning the version, ie "nerfstudio==0.1.19"
+]
+
+[tool.setuptools.packages.find]
+include = ["ray_sampler_nerf*"]
+
+[project.entry-points.'nerfstudio.method_configs']
+my-method = 'ray_sampler_nerf.ray_sampler_config:ray_sampler'

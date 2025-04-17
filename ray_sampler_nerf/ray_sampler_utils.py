@@ -1,4 +1,6 @@
 from typing import Literal
+from tqdm import tqdm
+import time
 
 import torch
 
@@ -58,6 +60,7 @@ def _sample_rays(
     Sample rays uniformly from the sphere around the scene. I might also give small perturbations to the ray directions, so
     they dont just point to the center of the scene.
     """
+    #print(f"Sampling {num_samples} rays")
     device = "cuda" if mi.variant() == "cuda_ad_rgb" else "cpu"
 
     samples = torch.rand(int(num_samples/group_factor),2)
@@ -105,11 +108,17 @@ def _intersect_scene(scene ,origins : torch.Tensor,dirs : torch.Tensor, spp : in
     #Intersect the scene
     sum = torch.zeros_like(origins,device = device)
     for i in range(spp):
+        start_sample = time.time()
         spec,_,_ = scene.integrator().sample(scene,sampler,rays)
+        end_sample = time.time()
+        #print("TIME OF SAMPLE", end_sample - start_sample )
         sum+=spec.torch().T
+        start_advance = time.time()
         if i > 0 :
             sampler.advance()
             sampler.schedule_state()
+        end_advance = time.time()
+        #print("TIME OF ADVANCE", end_advance - start_advance )
     return sum / spp
 
 def _sample_cone(cosThetaMax ,num_samples = 5000):

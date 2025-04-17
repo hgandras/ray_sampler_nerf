@@ -27,7 +27,7 @@ class RaySamplerDataManagerConfig(DataManagerConfig):
     """Number of rays per batch for training."""
     eval_num_rays_per_batch:int = 4096
     """Number of rays per batch for evaluation."""
-    pregenerate_samples : bool = True
+    pregenerate_samples : bool = False
     """Whether to pregenerate the ray samples, or calculate them parallel during training"""
     num_samples : int = 1_000_000
     """Number of rays to sample before training"""
@@ -37,6 +37,8 @@ class RaySamplerDataManagerConfig(DataManagerConfig):
     """How many rays are grouped at the same origin"""
     hemisphere : bool = True
     "Whether to sample the rays from a sphere, or a hemisphere around the object"
+    spp : int = 16
+    """Number of samples per directions"""
 
 class RaySamplerDataManager(DataManager):
     def __init__(
@@ -74,15 +76,18 @@ class RaySamplerDataManager(DataManager):
                 self.config.num_samples,
                 self.config.cone_angle,
                 self.config.group_factor,
-                self.config.hemisphere
+                self.config.hemisphere,
+                self.config.spp,
+                self.test_mode
             )
         else:
             return  ParallelSampleRayDataset(
                 self.dataparser_outputs,
-                self.config.num_samples,
+                self.config.train_num_rays_per_batch,
                 self.config.cone_angle,
                 self.config.group_factor,
-                self.config.hemisphere
+                self.config.hemisphere,
+                self.config.spp
             )
                 
     def create_eval_dataset(self):
@@ -96,7 +101,9 @@ class RaySamplerDataManager(DataManager):
                 self.config.num_samples,
                 self.config.cone_angle,
                 self.config.group_factor,
-                self.config.hemisphere
+                self.config.hemisphere,
+                self.config.spp,
+                self.test_mode
             )
         else:
             return  ParallelSampleRayDataset(
@@ -109,11 +116,18 @@ class RaySamplerDataManager(DataManager):
     
     def setup_train(self):
         self.train_ray_stream = RayStream(self.train_dataset)
-        self.train_dataloader = DataLoader(
-            self.train_ray_stream,
-            batch_size=self.config.train_num_rays_per_batch, 
-            num_workers=0
-        )
+        if isinstance(self.train_ray_stream.input_dataset, ParallelSampleRayDataset):
+            self.train_dataloader = DataLoader(
+                self.train_ray_stream,
+                batch_size=1, 
+                num_workers=0
+            )
+        else:
+            self.train_dataloader = DataLoader(
+                self.train_ray_stream,
+                batch_size=self.config.train_num_rays_per_batch, 
+                num_workers=0
+            )
         self.train_iter = iter(self.train_dataloader)
     
     def setup_eval(self):
@@ -130,7 +144,7 @@ class RaySamplerDataManager(DataManager):
         # Somehow it is faster to index everything here than loadiing everything to a dataset and iterating 
         # through that
         ray_batch = next(self.train_iter)
-        indices = ray_batch["image_idx"]
+        indices = ray_batch["image_idx"].squeeze()
         if self.type == "npz":
             directions = self.dataparser_outputs.metadata["directions"][indices]
             origins = self.dataparser_outputs.metadata["origins"][indices]
@@ -138,14 +152,13 @@ class RaySamplerDataManager(DataManager):
             pixel_size = self.dataparser_outputs.metadata["pixel_size"]
 
         else:
-            directions = ray_batch["directions"]
-            origins = ray_batch["origins"]
-            images = ray_batch["images"].to(self.device)
+            directions = ray_batch["directions"].squeeze()
+            origins = ray_batch["origins"].squeeze()
+            images = ray_batch["image"].squeeze().to(self.device)
             pixel_size = self._get_pixel_area(
-                self.dataparser_outputs.metadata["scene"].bbox().bounding_sphere().radius,
+                1.0,
                 self.config.num_samples
                 )
-            
         min = 0.66666
         max  = 1.5
         pixelsize_modifier = (max - min) * torch.randn(len(indices)) + min
@@ -157,10 +170,8 @@ class RaySamplerDataManager(DataManager):
         ).to(self.device)
 
         extension =  torch.ones(self.config.train_num_rays_per_batch,2)
-        ids = ray_batch["image_idx"][:,None]
+        ids = indices[:,None]
         ray_indices = torch.cat([ids,extension], dim = 1).to(self.device)
-
-
         batch ={ "image" : images, "indices" : ray_indices}
         
         return ray_bundle, batch
@@ -174,7 +185,6 @@ class RaySamplerDataManager(DataManager):
             pixel_area = self.pixel_size
         )
         batch ={"image" : ray_batch["image"].to(self.device)}
-        print("IMAGE BATCHES" , batch["image"].shape)
         return ray_bundle, batch 
 
     def next_eval_image(self, step: int) -> Tuple[Cameras, Dict]:

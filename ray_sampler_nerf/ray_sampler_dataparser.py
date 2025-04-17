@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 import math
+import importlib.util
+import sys
+import os
 
 import mitsuba as mi
 
@@ -97,7 +100,26 @@ class RaySamplerDataParser(DataParser):
                 image_filenames = [],
                 cameras= Cameras(torch.eye(4),1.0,1.0,0.5,0.5,1,1, camera_type= CameraType.PERSPECTIVE), #placeholder 
                 alpha_color = torch.ones(3,dtype = torch.float32),
-                scene_box = SceneBox(bbox_tensor),
+                scene_box = SceneBox(aabb = bbox_tensor),
+                metadata = metadata
+            )
+        elif extension == "py":
+            # Example usage
+            module_name = 'my_module'
+            print(self.config.data.name)
+            module = self.import_file_by_filename(module_name, self.config.data)
+            scene_dict = module.get_scene_dict()
+            scene = mi.load_dict(scene_dict)
+            bbox = scene.bbox()
+            corner = bbox.corner(0).torch()
+            max = bbox.corner(7).torch()
+            bbox_tensor = torch.stack([corner,max],dim = 0)
+            metadata = {"scene" : scene, "type" : extension}
+            output = DataparserOutputs(
+                image_filenames = [],
+                cameras= Cameras(torch.eye(4),1.0,1.0,0.5,0.5,1,1, camera_type= CameraType.PERSPECTIVE), #placeholder 
+                alpha_color = torch.ones(3,dtype = torch.float32),
+                scene_box = SceneBox(aabb = bbox_tensor),
                 metadata = metadata
             )
         else:
@@ -133,6 +155,14 @@ class RaySamplerDataParser(DataParser):
     
     def _get_pixel_area(self, radius, num_samples):
         return 4 * torch.pi * radius * radius / num_samples
+    
+    def import_file_by_filename(self, module_name, file_path):
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module
+
 
 
 
